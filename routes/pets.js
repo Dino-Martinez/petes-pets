@@ -2,6 +2,7 @@
 const multer = require('multer')
 const upload = multer({ dest: 'uploads/' })
 const Upload = require('s3-uploader')
+const mailer = require('../utils/mailer')
 
 const client = new Upload(process.env.S3_BUCKET, {
   aws: {
@@ -130,6 +131,14 @@ module.exports = app => {
           source: token,
         })
         .then(chg => {
+          // Convert the amount back to dollars for ease in displaying in the template
+          const user = {
+            email: req.body.stripeEmail,
+            amount: chg.amount / 100,
+            petName: pet.name,
+          }
+          // Call our mail handler to manage sending emails
+          mailer.sendMail(user, req, res)
           res.redirect(`/pets/${req.params.id}`)
         })
         .catch(err => {
@@ -138,22 +147,23 @@ module.exports = app => {
     })
   })
 
-  app.get('/search', (req, res) => {
-    const term = new RegExp(req.query.term, 'i')
+  app.get('/search', function(req, res) {
+    Pet.find(
+      { $text: { $search: req.query.term } },
+      { score: { $meta: 'textScore' } }
+    )
+      .sort({ score: { $meta: 'textScore' } })
+      .limit(20)
+      .exec(function(err, pets) {
+        if (err) {
+          return res.status(400).send(err)
+        }
 
-    const page = req.query.page || 1
-    Pet.paginate(
-      {
-        $or: [{ name: term }, { species: term }],
-      },
-      { page: page }
-    ).then(results => {
-      res.render('pets-index', {
-        pets: results.docs,
-        pagesCount: results.pages,
-        currentPage: page,
-        term: req.query.term,
+        if (req.header('Content-Type') == 'application/json') {
+          return res.json({ pets: pets })
+        } else {
+          return res.render('pets-index', { pets: pets, term: req.query.term })
+        }
       })
-    })
   })
 }
